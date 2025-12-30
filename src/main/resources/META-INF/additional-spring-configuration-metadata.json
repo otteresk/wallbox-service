@@ -1,0 +1,7 @@
+{"properties": [
+  {
+    "name": "app.savefilename",
+    "type": "java.lang.String",
+    "description": "File to which data is appended"
+  }
+]}
