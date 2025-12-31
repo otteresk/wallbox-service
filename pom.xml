@@ -12,7 +12,7 @@
 	<artifactId>wallbox-service</artifactId>
 	<version>0.0.1</version>
 	<name>wallbox-service</name>
-	<description>Demo project for Spring Boot</description>
+	<description>Wallbox Micro Service</description>
 	<url/>
 	<licenses>
 		<license/>
@@ -60,6 +60,18 @@
 			<artifactId>reactor-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+ 
+	  	<dependency>  
+    		<groupId>com.fazecast</groupId>  
+    		<artifactId>jSerialComm</artifactId>  
+    		<version>2.0.2</version>  
+  	  	</dependency>  
+	  	<dependency>  
+    		<groupId>se.cloudcharge</groupId>  
+    		<artifactId>serialmanager</artifactId>  
+    		<version>1.0.0</version>  
+  	  	</dependency>  
+
 	</dependencies>
 
 	<build>

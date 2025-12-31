@@ -29,10 +29,10 @@ public class DataController {
     ////////////////////////////////////////////////////////////////////////////
     @GetMapping(path="/latest")
     @ResponseBody
-    public DataPoint getLatestData() {
+    public WallBoxState getLatestState() {
 
 		// just to test
-		DataPoint response = new DataPoint(42, 0, 0, 0, 0, 0);
+		WallBoxState response = wallbox.getLatestState();
         
         return response;
     }
