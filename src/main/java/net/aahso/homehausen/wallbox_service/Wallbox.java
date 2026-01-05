@@ -58,15 +58,18 @@ public class Wallbox {
     private EVCC2 myevcc2 = null;
     private State box_state = null;
     private int address = -1;
-    private int state_call_status = CALL_INIT;
-    private int bool_call_status = CALL_INIT;
-    private Boolean bool_return_value = false;
+    private volatile int state_call_status = CALL_INIT;
+    private volatile int bool_call_status = CALL_INIT;
+    private volatile Boolean bool_return_value = false;
 
-	private volatile boolean running = true;
-    private volatile Thread workerThread;
+	private volatile boolean dataPumpRunning = true;
+    private volatile Thread dataPumpThread;
+    private volatile boolean chargingTaskRunning = false;
+    private volatile Thread chargeRequestThread;
 	private final Logger logger = LoggerFactory.getLogger(this.getClass());
     
 	private LinkedList<WallBoxState> stateList = new LinkedList<WallBoxState>();
+	private ArrayList<StatusLine> statusLines = new ArrayList<StatusLine>();
 
 	// Constructor for Wallbox
 	public Wallbox( TaskExecutor taskExecutor ) {
@@ -85,17 +88,18 @@ public class Wallbox {
         }
 
 		if (initStatus.equals("OK")) logger.info("Wallbox successfully initialized!");
+
 	}
 
 	// MAIN DATA PUMP LOOP
     @EventListener(ApplicationReadyEvent.class)
     public void runDataPump(ApplicationReadyEvent ev) {
         taskExecutor.execute(() -> {
-            workerThread = Thread.currentThread();
+            dataPumpThread = Thread.currentThread();
 		    int loopCount = 0;
 
 			try {
-                while (running && initStatus.equals("OK") && loopCount > -3) {
+                while (dataPumpRunning && initStatus.equals("OK") && loopCount > -3) {
                     try {
 
 						// start with some sleep
@@ -104,8 +108,7 @@ public class Wallbox {
                         loopCount++;
                         System.out.println("Loop: " + loopCount);
                         
-						String state = getState();
-						System.out.println("Wallbox State: " + state);
+						String state = readState();
                         long timeStampSeconds = Instant.now().getEpochSecond();
 
                         // add to state list
@@ -114,20 +117,21 @@ public class Wallbox {
                         // write state to file
                         saveStateToFile(stateList.peekLast());
                         
-						System.out.println("State List size: " + stateList.size());
+						System.out.println("Wallbox State: "+state+"; State List size: " + stateList.size()+ "; chargingTaskRunning: " + chargingTaskRunning);
 
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        running = false;
+                        dataPumpRunning = false;
                     } catch (Exception e) {
                         // Log error but keep running
-                        System.err.println("Error in Wallbox Data Pump: " + e.getMessage());
+                        logger.error("Error in Wallbox Data Pump: " + e.getMessage());
                     }
                 }
             } finally {
-                workerThread = null;
+                dataPumpThread = null;
             }
         });
+
     }
 
     //////////////////
@@ -201,7 +205,7 @@ public class Wallbox {
     /// READ STATE ///
     //////////////////
 
-    private String getState() {
+    private String readState() {
         //System.out.println("Reading state ...");
 		try {
             while(state_call_status == CALL_RUNNING) Thread.sleep(100); // wait if previous call is still running
@@ -211,7 +215,7 @@ public class Wallbox {
                 while(state_call_status == CALL_RUNNING) Thread.sleep(50);
                 if (state_call_status == CALL_ERROR) {
                     logger.warn("Error reading state - Retrying");
-                    Thread.sleep(1*1000);
+                    if (tries<MAX_TRIES) Thread.sleep(1*1000);
                 }
                 else {
                     return box_state.getState();
@@ -235,37 +239,92 @@ public class Wallbox {
             logger.warn("Requested current " + current + "A is out of range (6-16A).");
             return new StatusLine(Instant.now().getEpochSecond(), "Bad Charge Request.");
         }
-
-        String state = null;
-        Boolean response = false;
-        final int[] TRIES = {5,9};
-        int LOOP_END = 2;
-        for (int loop=1; loop<=LOOP_END; loop++) {
-            // try to set current directly (if state is C2, this will work)
-            response = setCurrent(current);
-            // !!!! process reposnse
-
-            // check state is C2
-            System.out.println("Check if status turns to C2");
-            for (int tries=1; tries<=TRIES[loop-1]; tries++) {
-                state = getState();
-                System.out.println("State: "+state);
-                if (state.equals("C2")) break; 
-                // sleep and try again
-                try { Thread.sleep(7000); }
-                catch (Exception e) { e.printStackTrace(); }
-            }
-            
-            if (state.equals("C2")) break; 
-            if (loop==LOOP_END) break;
-            response = resetWallbox();
-            // no matter what the response is, wait a bit (reset never fails)
-            try { Thread.sleep(6000); }
-            catch (Exception e) { e.printStackTrace(); }
-
+        if (chargingTaskRunning) {
+            logger.warn("Charging process already running.");
+            return new StatusLine(Instant.now().getEpochSecond(), "Charging process already running.");
         }
 
-        return new StatusLine(7, "response: "+response+"; final state: "+state);
+        chargingTaskRunning = false;
+        statusLines.clear();
+        statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Ladeprozess gestartet.") );
+
+        taskExecutor.execute(() -> {
+            chargeRequestThread = Thread.currentThread();
+            chargingTaskRunning = true;
+
+			try {
+
+                final int NO_PASSES = 2;
+                final int SLEEP_MILLIS = 100;
+                final int[] WAIT_SECS = {30,60};
+
+                String state = null;
+                Boolean response = false;
+
+                for (int pass=1; pass<=NO_PASSES; pass++) {
+                    // try to set current directly (if state is C2, this will work immediately)
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Setze Strom auf " + current + "A.") );
+                    response = setCurrent(current);
+                    if (chargingTaskRunning==false) break;
+                    if (response==false) {
+                        // better handling needed
+                        break;
+                    }
+
+                    // check if state is C2
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Warte "+WAIT_SECS[pass-1]+" Sekunden auf Ladebeginn.") );
+                    System.out.println("Check if status turns to C2 for "+WAIT_SECS[pass-1]+" seconds ...");
+                    int wait_loops=WAIT_SECS[pass-1]*1000/SLEEP_MILLIS;
+                    for (int i=1; i<=wait_loops; i++) {
+                        state = getLatestState().getState();
+                        if (state.equals("C2")) break; 
+                        if (chargingTaskRunning==false) break;
+                        // sleep and try again
+                        try { Thread.sleep(SLEEP_MILLIS); }
+                        catch (Exception e) { e.printStackTrace(); }
+                    }
+                    
+                    if (chargingTaskRunning==false) break;
+                    if (state.equals("C2")) break; 
+                    if (pass==NO_PASSES) break;
+                    // if not C2 yet, reset and try again
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Laden hat nicht begonnen. Reset der Wallbox.") );
+                    resetWallbox();
+                    // no matter what the response is, wait a bit (reset never fails)
+                    // just wait 5 seconds for the box to reset
+                    wait_loops=5*1000/SLEEP_MILLIS;
+                    for (int i=1; i<=wait_loops; i++) {
+                        if (chargingTaskRunning==false) break;
+                        try { Thread.sleep(SLEEP_MILLIS); }
+                        catch (Exception e) { e.printStackTrace(); }
+                    }
+                    // now check for 5 seconds if state is valid
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Warte auf Antwort der Wallbox.") );
+                    wait_loops=5*1000/SLEEP_MILLIS;
+                    for (int i=1; i<=wait_loops; i++) {
+                        state = getLatestState().getState();
+                        if (!state.equals("XX")) break; 
+                        if (chargingTaskRunning==false) break;
+                        try { Thread.sleep(SLEEP_MILLIS); }
+                        catch (Exception e) { e.printStackTrace(); }
+                    }
+
+                }
+
+            } finally {
+                chargeRequestThread = null;
+            }
+            chargingTaskRunning = false;
+            statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Laden erfolgreich gestartet.") );
+
+        });
+
+        try { Thread.sleep(500); } catch (Exception e) { }
+
+        if (chargingTaskRunning) {
+            return new StatusLine(Instant.now().getEpochSecond(), "Charging process started.");
+        }
+        return new StatusLine(Instant.now().getEpochSecond(), "Charging process not started ???");
     }
 
     //////////////////////
@@ -276,8 +335,12 @@ public class Wallbox {
     public StatusLine stopCharging() {
 
         final int MAX_TRIES = 3;
-        System.out.println("Stopping charging ..."); 
-        
+        logger.info("Received Request to stop charging."); 
+
+        //stop the chargin process
+        chargingTaskRunning = false;
+        statusLines.clear();
+
         int pwm = 60; // = OFF!
         ResponseSpec dummyMatch = new RegexpResponseSpec("[" + EVCC2.R_PREFIX + "]\\w*");
         Command command = new BaseCommand(CommandEnum.EVCC2_SET_IMAX.write(address, pwm),
@@ -286,40 +349,52 @@ public class Wallbox {
             try {            
                 QueryResponse response = myBus.query(command, EVCC2.evcc2BusOptions);
                 if (response.getCode().equals(QueryResponse.ResponseCode.OK)) {
-                    System.out.println("Stop request successful.");
+                    logger.info("Stop request successful.");
                     return new StatusLine(Instant.now().getEpochSecond(), "Stop request successful.");
                 }
                 else {
-                    System.out.println("stop request failed - Retrying");
-                    Thread.sleep(2*1000);
+                    logger.warn("Stop request failed - Retrying");
+                    if (tries<MAX_TRIES) Thread.sleep(2*1000);
                 }
             } catch (Exception e) {
-                System.out.println("Exception in stopCharging: " + e.getMessage());
+                logger.warn("Exception in stopCharging: " + e.getMessage());
                 if (tries<MAX_TRIES) System.out.println("Retrying...");
             }
         }
-        System.out.println("stop request failed!!!");
+        logger.error("Stop request failed!!!");
         return new StatusLine(Instant.now().getEpochSecond(), "stop request failed!!!");
     }
-
 
     /////////////////
     // SET CURRENT //
     /////////////////
 
     private Boolean setCurrent(int current) {
-        final int MAX_TRIES = 3;
+        final int MAX_TRIES = 4;
+        if (chargingTaskRunning==false) return false;
         System.out.println("Setting current to " + current + " ..."); 
 
         try {
-            while(bool_call_status == CALL_RUNNING) Thread.sleep(100); // wait if previous call is still running
-
+             // wait if previous call is still running
+            while(bool_call_status == CALL_RUNNING) {
+                if (chargingTaskRunning==false) return false;
+                Thread.sleep(100);
+            }
+            // now try
             for (int tries = 1; tries <= MAX_TRIES; tries++) {
                 myevcc2.setIMax(current).subscribe(bool_observer);
-                while(bool_call_status == CALL_RUNNING) Thread.sleep(20);
+                while(bool_call_status == CALL_RUNNING) {
+                    if (chargingTaskRunning==false) return false;
+                    Thread.sleep(50);
+                }
                 if (bool_call_status == CALL_ERROR) {
                     System.out.println("setting current failed - Retrying");
-                    Thread.sleep(1000);
+                    if(tries<MAX_TRIES) {
+                        for (int i=1; i<=10; i++) {
+                            if (chargingTaskRunning==false) return false;
+                            Thread.sleep(100);
+                        }
+                    }
                 }
                 else {
                     System.out.println("Successfully set current to: " + current);
@@ -349,8 +424,8 @@ public class Wallbox {
             while(bool_call_status == CALL_RUNNING) Thread.sleep(50);
             //System.out.println(bool_call_status);
             if (bool_call_status == CALL_ERROR) {
-                System.out.println("Error in Resetting - we don't care");
-                return false;
+                // System.out.println("Error in Resetting - this is normal - we don't care");
+                return true;
             }
             else {
                 return true;
@@ -370,6 +445,11 @@ public class Wallbox {
 		return stateList.peekLast();
 	}
 
+    // get status lines for charge request
+    public ArrayList<StatusLine> getStatusLines() {
+        return statusLines;
+    }
+
     // add to state list and clean up old list entries
     private void addToList(String state, long timeStampSeconds) {
         if (stateList.size() == 0) {
@@ -384,10 +464,11 @@ public class Wallbox {
             stateList.add(new WallBoxState(timeStampSeconds, state));
         }
         
-        // remove old data points (older than 120 minutes)
-        if (stateList.size() > 10) {
+        // remove old data points (older than 120 minutes) if there are too many entries
+        final long TWO_HOURS_AGO = Instant.now().getEpochSecond() - 2*60*60;
+        if (stateList.size() > 10 && stateList.peekFirst().getTimeStamp() < TWO_HOURS_AGO) {
             System.out.println("Cleaning up old state entries...");
-            stateList.removeIf((WallBoxState w) -> w.getTimeStamp() < Instant.now().getEpochSecond() - 2*60*60);
+            stateList.removeIf((WallBoxState w) -> w.getTimeStamp() < TWO_HOURS_AGO);
         }
     }
 
@@ -408,8 +489,8 @@ public class Wallbox {
     @PreDestroy
     private void stopThread() {
         logger.info("Shutdown requested: stopping Wallbox data pump");
-        running = false;
-        Thread t = workerThread;
+        dataPumpRunning = false;
+        Thread t = dataPumpThread;
         if (t != null) {
             t.interrupt();
             try {

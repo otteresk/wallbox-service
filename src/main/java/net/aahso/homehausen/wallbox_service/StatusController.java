@@ -2,6 +2,7 @@ package net.aahso.homehausen.wallbox_service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,5 +31,15 @@ public class StatusController {
         return response;
     }
 	
+    ////////////////////////////////////////////////////////////////////////////
+    // get status lines for charge request 
+    ////////////////////////////////////////////////////////////////////////////
+    @GetMapping(path="/charging")
+    @ResponseBody
+    public List<StatusLine> getStatusLines() {
+        return wallbox.getStatusLines();
+    }
+
+
 
 }
