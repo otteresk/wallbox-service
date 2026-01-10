@@ -466,7 +466,7 @@ public class Wallbox {
         
         // remove old data points (older than 120 minutes) if there are too many entries
         final long TWO_HOURS_AGO = Instant.now().getEpochSecond() - 2*60*60;
-        if (stateList.size() > 10 && stateList.peekFirst().getTimeStamp() < TWO_HOURS_AGO) {
+        if (stateList.size() > 100 && stateList.peekFirst().getTimeStamp() < TWO_HOURS_AGO) {
             System.out.println("Cleaning up old state entries...");
             stateList.removeIf((WallBoxState w) -> w.getTimeStamp() < TWO_HOURS_AGO);
         }
@@ -489,6 +489,7 @@ public class Wallbox {
     @PreDestroy
     private void stopThread() {
         logger.info("Shutdown requested: stopping Wallbox data pump");
+
         dataPumpRunning = false;
         Thread t = dataPumpThread;
         if (t != null) {
@@ -499,6 +500,18 @@ public class Wallbox {
                 Thread.currentThread().interrupt();
             }
         }
+
+        chargingTaskRunning = false;
+        t = chargeRequestThread;
+        if (t != null) {
+            t.interrupt();
+            try {
+                t.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
     }
 
     /// Observer for State
