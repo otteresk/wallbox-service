@@ -324,7 +324,7 @@ public class Wallbox {
         if (chargingTaskRunning) {
             return new StatusLine(Instant.now().getEpochSecond(), "Charging process started.");
         }
-        return new StatusLine(Instant.now().getEpochSecond(), "Charging process not started ???");
+        return new StatusLine(Instant.now().getEpochSecond(), "Charging process finished.");
     }
 
     //////////////////////
