@@ -31,7 +31,7 @@ public class RequestController {
 
         if (current < 6 || current > 16) {
             logger.warn("Requested current " + current + "A is out of range (6-16A).");
-            return new StatusLine(Instant.now().getEpochSecond(), "Bad Charge Request.");
+            return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_FAILED, "Bad Charge Request.");
         }
 
 		StatusLine response = wallbox.startCharging(current);
@@ -45,7 +45,7 @@ public class RequestController {
 
         if ( !confirm.equals("iamsure") ) {
             logger.warn("Bad Stop request.");
-            return new StatusLine(Instant.now().getEpochSecond(), "Bad Stop Request.");
+            return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_FAILED, "Bad Stop Request.");
         }
 
 		StatusLine response = wallbox.stopCharging();

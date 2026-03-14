@@ -237,16 +237,16 @@ public class Wallbox {
     public StatusLine startCharging(int current) {
         if (current < 6 || current > 16) {
             logger.warn("Requested current " + current + "A is out of range (6-16A).");
-            return new StatusLine(Instant.now().getEpochSecond(), "Bad Charge Request.");
+            return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_FAILED, "Bad Charge Request.");
         }
         if (chargingTaskRunning) {
             logger.warn("Charging process already running.");
-            return new StatusLine(Instant.now().getEpochSecond(), "Charging process already running.");
+            return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Charging process already running.");
         }
 
         chargingTaskRunning = false;
         statusLines.clear();
-        statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Ladeprozess gestartet.") );
+        statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Ladeprozess gestartet.") );
 
         taskExecutor.execute(() -> {
             chargeRequestThread = Thread.currentThread();
@@ -263,7 +263,7 @@ public class Wallbox {
 
                 for (int pass=1; pass<=NO_PASSES; pass++) {
                     // try to set current directly (if state is C2, this will work immediately)
-                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Setze Strom auf " + current + "A.") );
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Setze Strom auf " + current + "A.") );
                     response = setCurrent(current);
                     if (chargingTaskRunning==false) break;
                     if (response==false) {
@@ -272,7 +272,7 @@ public class Wallbox {
                     }
 
                     // check if state is C2
-                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Warte "+WAIT_SECS[pass-1]+" Sekunden auf Ladebeginn.") );
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Warte "+WAIT_SECS[pass-1]+" Sekunden auf Ladebeginn.") );
                     System.out.println("Check if status turns to C2 for "+WAIT_SECS[pass-1]+" seconds ...");
                     int wait_loops=WAIT_SECS[pass-1]*1000/SLEEP_MILLIS;
                     for (int i=1; i<=wait_loops; i++) {
@@ -288,7 +288,7 @@ public class Wallbox {
                     if (state.equals("C2")) break; 
                     if (pass==NO_PASSES) break;
                     // if not C2 yet, reset and try again
-                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Laden hat nicht begonnen. Reset der Wallbox.") );
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Laden hat nicht begonnen. Reset der Wallbox.") );
                     resetWallbox();
                     // no matter what the response is, wait a bit (reset never fails)
                     // just wait 5 seconds for the box to reset
@@ -299,7 +299,7 @@ public class Wallbox {
                         catch (Exception e) { e.printStackTrace(); }
                     }
                     // now check for 5 seconds if state is valid
-                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Warte auf Antwort der Wallbox.") );
+                    statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Warte auf Antwort der Wallbox.") );
                     wait_loops=5*1000/SLEEP_MILLIS;
                     for (int i=1; i<=wait_loops; i++) {
                         state = getLatestState().getState();
@@ -314,17 +314,25 @@ public class Wallbox {
             } finally {
                 chargeRequestThread = null;
             }
+            // final check of state
+            String state = getLatestState().getState();
+            if (!state.equals("C2")) {
+                logger.warn("Charging process did not start successfully. Final state: " + state);
+                statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_FAILED, "Ladeprozess konnte nicht gestartet werden. Endstatus: " + state) );
+                chargingTaskRunning = false;
+                return;
+            }
+            statusLines.add( new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_SUCCESS, "Laden erfolgreich gestartet.") );
             chargingTaskRunning = false;
-            statusLines.add( new StatusLine(Instant.now().getEpochSecond(), "Laden erfolgreich gestartet.") );
 
         });
 
         try { Thread.sleep(500); } catch (Exception e) { }
 
         if (chargingTaskRunning) {
-            return new StatusLine(Instant.now().getEpochSecond(), "Charging process started.");
+            return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Charging process started.");
         }
-        return new StatusLine(Instant.now().getEpochSecond(), "Charging process finished.");
+        return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_INFO, "Charging process finished.");
     }
 
     //////////////////////
@@ -350,7 +358,7 @@ public class Wallbox {
                 QueryResponse response = myBus.query(command, EVCC2.evcc2BusOptions);
                 if (response.getCode().equals(QueryResponse.ResponseCode.OK)) {
                     logger.info("Stop request successful.");
-                    return new StatusLine(Instant.now().getEpochSecond(), "Stop request successful.");
+                    return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_SUCCESS, "Stop request successful.");
                 }
                 else {
                     logger.warn("Stop request failed - Retrying");
@@ -362,7 +370,7 @@ public class Wallbox {
             }
         }
         logger.error("Stop request failed!!!");
-        return new StatusLine(Instant.now().getEpochSecond(), "stop request failed!!!");
+        return new StatusLine(Instant.now().getEpochSecond(), StatusLine.TYPE_FAILED, "stop request failed!!!");
     }
 
     /////////////////
