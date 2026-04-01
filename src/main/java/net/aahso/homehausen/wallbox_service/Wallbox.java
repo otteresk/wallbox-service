@@ -56,8 +56,8 @@ public class Wallbox {
 	private String initStatus = "NONE";
     private Bus myBus = null;
     private EVCC2 myevcc2 = null;
-    private State box_state = null;
     private int address = -1;
+    private volatile State box_state = null;
     private volatile int state_call_status = CALL_INIT;
     private volatile int bool_call_status = CALL_INIT;
     private volatile Boolean bool_return_value = false;
@@ -258,7 +258,7 @@ public class Wallbox {
                 final int SLEEP_MILLIS = 100;
                 final int[] WAIT_SECS = {30,60};
 
-                String state = null;
+                String state = "00";
                 Boolean response = false;
 
                 for (int pass=1; pass<=NO_PASSES; pass++) {
@@ -268,7 +268,7 @@ public class Wallbox {
                     if (chargingTaskRunning==false) break;
                     if (response==false) {
                         // better handling needed
-                        break;
+                        System.out.println("Setting the current was NOT successful! This is not handeled yet ...");
                     }
 
                     // check if state is C2
@@ -378,7 +378,8 @@ public class Wallbox {
     /////////////////
 
     private Boolean setCurrent(int current) {
-        final int MAX_TRIES = 4;
+        final int MAX_TRIES = 5;
+        final int RETRY_MSECS = 1500;
         if (chargingTaskRunning==false) return false;
         System.out.println("Setting current to " + current + " ..."); 
 
@@ -398,7 +399,7 @@ public class Wallbox {
                 if (bool_call_status == CALL_ERROR) {
                     System.out.println("setting current failed - Retrying");
                     if(tries<MAX_TRIES) {
-                        for (int i=1; i<=10; i++) {
+                        for (int i=1; i<=(RETRY_MSECS/100); i++) {
                             if (chargingTaskRunning==false) return false;
                             Thread.sleep(100);
                         }
